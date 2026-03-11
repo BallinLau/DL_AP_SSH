@@ -1,0 +1,12 @@
+cachedir/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+*.log
+.ipynb_checkpoints/
+
+# OS artifacts
+.DS_Store
