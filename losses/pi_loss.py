@@ -146,6 +146,72 @@ class PILoss(nn.Module):
             bar_z_children=[bar_z2, bar_z3]
         )
         return residuals[0], residuals[1]
+
+    def compute_foc_residual(
+        self,
+        cfip_grad: torch.Tensor,
+        M_list: List[torch.Tensor],
+        P_grads: List[torch.Tensor],
+        bar_z_children: List[torch.Tensor],
+        eta: torch.Tensor
+    ) -> List[torch.Tensor]:
+        """
+        计算 PI 的 FOC 残差（支持任意分支数）
+
+        foc^{(j)} = cf_grad + g * M^{(j)} * P'_grad^{(j)} * (1 - bar_z'^{(j)}) * η
+        """
+        residuals = []
+        for M, P_grad, bar_z in zip(M_list, P_grads, bar_z_children):
+            foc = cfip_grad + self.g * M * P_grad * (1 - bar_z) * eta
+            residuals.append(foc)
+        return residuals
+
+    def compute_foc_residual_from_bp(
+        self,
+        CFip: torch.Tensor,
+        M_list: List[torch.Tensor],
+        P_children: List[torch.Tensor],
+        bar_z_children: List[torch.Tensor],
+        bp: torch.Tensor,
+        eta: torch.Tensor
+    ) -> List[torch.Tensor]:
+        """
+        基于 bp 直接计算 PI 的 FOC 残差（支持任意分支数）
+
+        先计算：
+        - cfip_grad = ∂CFip/∂bp
+        - P'_grad^{(j)} = ∂P_children^{(j)}/∂bp
+        """
+        cfip_grad = torch.autograd.grad(
+            outputs=CFip.sum(),
+            inputs=bp,
+            create_graph=True,
+            retain_graph=True,
+            allow_unused=True
+        )[0]
+        if cfip_grad is None:
+            cfip_grad = torch.zeros_like(bp)
+
+        p_grads = []
+        for P_child in P_children:
+            p_grad = torch.autograd.grad(
+                outputs=P_child.sum(),
+                inputs=bp,
+                create_graph=True,
+                retain_graph=True,
+                allow_unused=True
+            )[0]
+            if p_grad is None:
+                p_grad = torch.zeros_like(bp)
+            p_grads.append(p_grad)
+
+        return self.compute_foc_residual(
+            cfip_grad=cfip_grad,
+            M_list=M_list,
+            P_grads=p_grads,
+            bar_z_children=bar_z_children,
+            eta=eta
+        )
     
     def compute_b_penalty(
         self,

@@ -97,6 +97,7 @@ class P0Loss(nn.Module):
         
         return cf0p
     
+
     def compute_bellman_residual(
         self,
         P0: torch.Tensor,
@@ -126,7 +127,7 @@ class P0Loss(nn.Module):
             residuals.append(residual)
         
         return residuals
-    
+
     def compute_bellman_residual_legacy(
         self,
         P0: torch.Tensor,
@@ -167,6 +168,57 @@ class P0Loss(nn.Module):
             foc = cf0p_grad + M * P_grad * (1 - bar_z) * eta
             residuals.append(foc)
         return residuals
+
+    def compute_foc_residual_from_bp(
+        self,
+        CF0p: torch.Tensor,
+        M_list: List[torch.Tensor],
+        P_children: List[torch.Tensor],
+        bar_z_children: List[torch.Tensor],
+        bp: torch.Tensor,
+        eta: torch.Tensor
+    ) -> List[torch.Tensor]:
+        """
+        基于 bp 直接计算 FOC 残差（支持任意分支数）
+
+        先计算：
+        - cf0p_grad = ∂CF0p/∂bp
+        - P'_grad^{(j)} = ∂P_children^{(j)}/∂bp
+
+        再代入：
+        foc^{(j)} = cf0p_grad + M^{(j)} * P'_grad^{(j)} * (1 - bar_z'^{(j)}) * η
+        """
+        cf0p_grad = torch.autograd.grad(
+            outputs=CF0p.sum(),
+            inputs=bp,
+            create_graph=True,
+            retain_graph=True,
+            allow_unused=True
+        )[0]
+        if cf0p_grad is None:
+            cf0p_grad = torch.zeros_like(bp)
+
+        p_grads = []
+        for P_child in P_children:
+            p_grad = torch.autograd.grad(
+                outputs=P_child.sum(),
+                inputs=bp,
+                create_graph=True,
+                retain_graph=True,
+                allow_unused=True
+            )[0]
+            if p_grad is None:
+                p_grad = torch.zeros_like(bp)
+
+            p_grads.append(p_grad)
+
+        return self.compute_foc_residual(
+            cf0p_grad=cf0p_grad,
+            M_list=M_list,
+            P_grads=p_grads,
+            bar_z_children=bar_z_children,
+            eta=eta
+        )
     
     def compute_foc_residual_legacy(
         self,

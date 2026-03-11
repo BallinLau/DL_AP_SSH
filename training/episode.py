@@ -489,6 +489,8 @@ class Episode:
         bp_t = _get_out(output_t, 'bp', -1)
         if bp_t.shape != bp0_t.shape:
             bp_t = bar_i_t * bpI_t + (1 - bar_i_t) * bp0_t
+        # P0 分支使用不投资场景的杠杆候选 bp0
+        bp_for_p0 = bp0_t
         b_parent = parent_state[:, 0:1]
 
         output_children = []
@@ -497,11 +499,11 @@ class Episode:
             child_state_raw = strip_extra(child)
             eta_child = child[:, 2:3]
             child_state = child_state_raw.clone()
-            child_state[:, 0:1] = eta_child * bp_t + (1 - eta_child) * b_parent
+            child_state[:, 0:1] = eta_child * bp_for_p0 + (1 - eta_child) * b_parent
             output_children.append(model(child_state))
             
         childp0_state = parent_state.clone()
-        childp0_state[:, 0:1] = bpI_t
+        childp0_state[:, 0:1] = bp_for_p0
         outputp0_children = model(childp0_state)
         
         # 提取 P0 和所需变量
@@ -534,7 +536,23 @@ class Episode:
             loss_fn.alpha_z, loss_fn.beta_z, loss_fn.z0
         )
 
-        total_loss = main_loss + penalty_z
+        foc_residuals = loss_fn.compute_foc_residual_from_bp(
+            CF0p=CF0p,
+            M_list=M_list,
+            P_children=P_children,
+            bar_z_children=bar_z_children,
+            bp=bp_for_p0,
+            eta=parent_state[:, 2:3]
+        )
+        foc_stack = torch.stack(foc_residuals, dim=-1)
+        foc_combined = foc_stack.prod(dim=-1)
+        loss_foc = foc_combined.abs().mean()
+        penalty_z_foc = compute_z_penalty(
+            foc_combined.abs(), parent_state[:, 1:2],
+            loss_fn.alpha_z, loss_fn.beta_z, loss_fn.z0
+        )
+
+        total_loss = main_loss + penalty_z + loss_foc + penalty_z_foc
         return total_loss
     
     def _compute_pi_loss(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
@@ -582,6 +600,8 @@ class Episode:
         bp_t = _get_out(output_t, 'bp', -1)
         if bp_t.shape != bp0_t.shape:
             bp_t = bar_i_t * bpI_t + (1 - bar_i_t) * bp0_t
+        # PI 分支使用投资场景的杠杆候选 bpI
+        bp_for_pi = bpI_t
         b_parent = parent_state[:, 0:1]
 
         output_children = []
@@ -590,11 +610,12 @@ class Episode:
             child_state_raw = strip_extra(child)
             eta_child = child[:, 2:3]
             child_state = child_state_raw.clone()
-            child_state[:, 0:1] = eta_child * bp_t + (1 - eta_child) * b_parent
+            child_state[:, 0:1] = bp_for_pi
+            # eta_child * bp_t + (1 - eta_child) * b_parent
             output_children.append(model(child_state))
             
         childpI_state = parent_state.clone()
-        childpI_state[:, 0:1] = bpI_t
+        childpI_state[:, 0:1] = bp_for_pi
         outputpI_children = model(childpI_state)
         
         # 提取 PI 和所需变量
@@ -633,7 +654,23 @@ class Episode:
         )
         penalty_b = loss_fn.b_penalty_weight * loss_fn.compute_b_penalty(PI, parent_state[:, 0:1]).mean()
 
-        total_loss = main_loss + penalty_z + penalty_b
+        foc_residuals = loss_fn.compute_foc_residual_from_bp(
+            CFip=CFip,
+            M_list=M_list,
+            P_children=P_children,
+            bar_z_children=bar_z_children,
+            bp=bp_for_pi,
+            eta=parent_state[:, 2:3]
+        )
+        foc_stack = torch.stack(foc_residuals, dim=-1)
+        foc_combined = foc_stack.prod(dim=-1)
+        loss_foc = foc_combined.abs().mean()
+        penalty_z_foc = compute_z_penalty(
+            foc_combined.abs(), parent_state[:, 1:2],
+            loss_fn.alpha_z, loss_fn.beta_z, loss_fn.z0
+        )
+
+        total_loss = main_loss + penalty_z + penalty_b + loss_foc + penalty_z_foc
         return total_loss
     
     def _compute_q_loss(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
